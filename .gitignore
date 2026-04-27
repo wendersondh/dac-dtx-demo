@@ -1,0 +1,18 @@
+application.properties
+test.py
+test.sh
+
+# Ignore build files to Java
+build/
+target/
+*.class
+# Ignore IDE files
+.idea/
+.gradle/
+*.iml
+java_installs/
+
+
+# Others
+.claude/
+.DS_Store

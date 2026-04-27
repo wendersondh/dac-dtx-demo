@@ -1,0 +1,17 @@
+spring.application.name=jpa-persistencia
+spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration
+spring.datasource.url=jdbc:h2:mem:testdb
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=password
+spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
+spring.h2.console.enabled=true
+spring.jpa.hibernate.ddl-auto=update
+server.port=8081
+
+# Seleciona a implementação do DAO: "jpa" (EntityManager), "jdbc" (DataSource) ou "mongo" (MongoDB)
+app.dao.impl=dtx
+
+# MongoDB Atlas — NÃO commitar credenciais em produção; use variáveis de ambiente
+app.mongo.uri=mongodb+srv://<username>:<password>@cluster0.mongodb.net/test?retryWrites=true&w=majority
+app.mongo.database=testdb
