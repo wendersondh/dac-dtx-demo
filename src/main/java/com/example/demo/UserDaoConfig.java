@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Configuration;
  *
  * O Spring resolve as propriedades placeholder apenas em tempo de execução,
  * não em anotações. Este bean factory seleciona qual implementação
- * (jpa, jdbc, mongo) será injetada baseado na propriedade app.dao.impl.
+ * (jpa, jdbc, mongo, dtx) será injetada baseado na propriedade app.dao.impl.
  *
  * @author DAC
  * @version 1.0
@@ -23,19 +23,21 @@ public class UserDaoConfig {
      * Procura pelos beans registrados com @Qualifier e escolhe
      * qual usar baseado na propriedade app.dao.impl.
      *
-     * @param jpaDao Implementação JPA (se disponível)
-     * @param jdbcDao Implementação JDBC (se disponível)
-     * @param mongoDao Implementação MongoDB (se disponível)
+     * @param dtxCoord Coordenador 2PC (se app.dao.impl=dtx)
+     * @param jpaDao   Implementação JPA (se app.dao.impl=jpa)
+     * @param jdbcDao  Implementação JDBC (se app.dao.impl=jdbc)
+     * @param mongoDao Implementação MongoDB (se app.dao.impl=mongo)
      * @return A implementação selecionada
      */
     @Bean
     public UserDao userDao(
-            ObjectProvider<UserJpaDao> jpaDao,
+            ObjectProvider<DTxCoord>    dtxCoord,
+            ObjectProvider<UserJpaDao>  jpaDao,
             ObjectProvider<UserJdbcDao> jdbcDao,
             ObjectProvider<UserMongoDao> mongoDao) {
-        // Retorna a primeira implementação disponível
-        // (em produção, isso seria baseado em uma propriedade)
-        if (jpaDao.getIfAvailable() != null) {
+        if (dtxCoord.getIfAvailable() != null) {
+            return dtxCoord.getObject();
+        } else if (jpaDao.getIfAvailable() != null) {
             return jpaDao.getObject();
         } else if (jdbcDao.getIfAvailable() != null) {
             return jdbcDao.getObject();
