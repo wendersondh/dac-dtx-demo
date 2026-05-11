@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *   commit():   session.commitTransaction() → confirma tudo de uma vez
  *   rollback(): session.abortTransaction()  → descarta tudo
  *
- * Diferença em relação ao UserMongoDao (existente):
+ * Diferença em relação ao UserMongoDao:
  *   - Aquele faz insert direto (sem sessão, sem transação explícita)
  *   - Este mantém a sessão aberta (prepare) até a decisão do coordenador
  *
@@ -62,7 +62,7 @@ public class UserMongoDAO implements Participant {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * FASE 1: inicia sessão + transação no MongoDB, executa insertOne() e aguarda.
+     * 1: inicia sessão + transação no MongoDB, executa insertOne() e aguarda.
      * A sessão fica aberta (transação pendente) até commit() ou rollback().
      *
      * O documento inserido NÃO está visível a outras leituras enquanto a
@@ -132,7 +132,7 @@ public class UserMongoDAO implements Participant {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Operações de escrita sequencial (usadas por update/delete no DTxCoord)
+    // Operações de escrita sequencial
     // ─────────────────────────────────────────────────────────────────────────
 
     public void update(UserEntity user) {

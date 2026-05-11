@@ -36,12 +36,8 @@ public class UserH2DAO implements Participant {
         this.dataSource = dataSource;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PROTOCOLO 2PC
-    // ─────────────────────────────────────────────────────────────────────────
-
     /**
-     * FASE 1: abre conexão, desliga autoCommit, executa INSERT e aguarda.
+     * Abre conexão, desliga autoCommit, executa INSERT e aguarda.
      * A conexão fica aberta (transação pendente) até commit() ou rollback().
      */
     @Override
@@ -76,7 +72,7 @@ public class UserH2DAO implements Participant {
         }
     }
 
-    /** FASE 2a: confirma o INSERT pendente e libera a conexão. */
+    // 2: confirma o INSERT pendente e libera a conexão.
     @Override
     public void commit() {
         Connection conn = pendingConn.get();
@@ -95,7 +91,7 @@ public class UserH2DAO implements Participant {
         }
     }
 
-    /** FASE 2b: reverte o INSERT pendente e libera a conexão. */
+    // 2: reverte o INSERT pendente e libera a conexão.
     @Override
     public void rollback() {
         Connection conn = pendingConn.get();
@@ -113,9 +109,8 @@ public class UserH2DAO implements Participant {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Operações de leitura (sem 2PC — apenas leitura do H2)
-    // ─────────────────────────────────────────────────────────────────────────
+
+    // Operações de leitura
 
     public UserEntity findById(Long id) {
         String sql = "SELECT id, name, email FROM users WHERE id = ?";
@@ -172,9 +167,8 @@ public class UserH2DAO implements Participant {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────
 
     private UserEntity mapRow(ResultSet rs) throws SQLException {
         UserEntity u = new UserEntity();

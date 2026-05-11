@@ -6,40 +6,6 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 
-/**
- * Coordenador de Transação Distribuída — implementação manual do 2PC.
- *
- * Ativa quando app.dao.impl=dtx em application.properties.
- * Implementa UserDao para ser injetado no UserController sem alteração.
- *
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │                    PROTOCOLO 2PC SIMULADO                           │
- * │                                                                     │
- * │  save(user)                                                         │
- * │    │                                                                │
- * │    ├── FASE 1 — PREPARE (votação)                                  │
- * │    │     ├── h2Dao.prepare(user)    → executa INSERT no H2         │
- * │    │     │                            sem commitar (conn aberta)   │
- * │    │     └── mongoDao.prepare(user) → executa insertOne no MongoDB  │
- * │    │                                  sem commitar (session aberta) │
- * │    │                                                                │
- * │    ├── Se ambos votaram YES:                                        │
- * │    │     FASE 2a — COMMIT                                          │
- * │    │       ├── h2Dao.commit()    → conn.commit() no H2             │
- * │    │       └── mongoDao.commit() → session.commitTransaction()     │
- * │    │                                                                │
- * │    └── Se algum votou NO:                                           │
- * │          FASE 2b — ROLLBACK                                        │
- * │            ├── h2Dao.rollback()    → conn.rollback() no H2         │
- * │            └── mongoDao.rollback() → session.abortTransaction()    │
- * └─────────────────────────────────────────────────────────────────────┘
- *
- * Limitações desta implementação didática em relação a um TM real:
- *   - Sem log durável de transação (falha entre fases 1 e 2 pode causar
- *     inconsistência — o "problema do coordenador" do 2PC clássico)
- *   - Sem recuperação automática após crash
- *   - MongoDB não implementa XA nativo; usamos ClientSession como aproximação
- */
 @Repository
 @Qualifier("dtx")
 @ConditionalOnProperty(name = "app.dao.impl", havingValue = "dtx")
@@ -53,9 +19,8 @@ public class DTxCoord implements UserDao {
         this.mongoDao = mongoDao;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // save — orquestra o 2PC entre H2 e MongoDB
-    // ─────────────────────────────────────────────────────────────────────────
 
     @Override
     public void save(UserEntity user) {
@@ -91,9 +56,8 @@ public class DTxCoord implements UserDao {
         log("══════════════════════════════════════════════════");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Leituras — delegadas ao H2 (fonte canônica de leitura)
-    // ─────────────────────────────────────────────────────────────────────────
 
     @Override
     public UserEntity findById(Long id) {
@@ -105,10 +69,8 @@ public class DTxCoord implements UserDao {
         return h2Dao.findAll();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Update e Delete — propagados sequencialmente a ambos os bancos
-    // (sem 2PC: o foco do exercício é a persistência via save/insert)
-    // ─────────────────────────────────────────────────────────────────────────
 
     @Override
     public void update(UserEntity user) {
@@ -124,9 +86,7 @@ public class DTxCoord implements UserDao {
         mongoDao.delete(id);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────────────────────────────────
+
 
     private String voto(boolean ready) {
         return ready ? "YES ✓" : "NO  ✗";
