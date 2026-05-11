@@ -5,43 +5,34 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Configuração para selecionar a implementação de UserDao em runtime.
+ * Seleciona a implementação de UserDao conforme app.dao.impl:
  *
- * O Spring resolve as propriedades placeholder apenas em tempo de execução,
- * não em anotações. Este bean factory seleciona qual implementação
- * (jpa, jdbc, mongo) será injetada baseado na propriedade app.dao.impl.
- *
- * @author DAC
- * @version 1.0
+ *   dtx    → DTxCoord   (2PC simulado: JDBC + MongoDB)
+ *   saga   → SagaCoord  (SAGA com compensação)
+ *   outbox → OutboxCoord (Outbox + relay assíncrono)
+ *   jpa    → UserJpaDao
+ *   jdbc   → UserJdbcDao
+ *   mongo  → UserMongoDao
  */
 @Configuration
 public class UserDaoConfig {
 
-    /**
-     * Factory bean que seleciona a implementação de UserDao.
-     *
-     * Procura pelos beans registrados com @Qualifier e escolhe
-     * qual usar baseado na propriedade app.dao.impl.
-     *
-     * @param jpaDao Implementação JPA (se disponível)
-     * @param jdbcDao Implementação JDBC (se disponível)
-     * @param mongoDao Implementação MongoDB (se disponível)
-     * @return A implementação selecionada
-     */
     @Bean
     public UserDao userDao(
-            ObjectProvider<UserJpaDao> jpaDao,
+            ObjectProvider<DTxCoord>    dtxCoord,
+            ObjectProvider<SagaCoord>   sagaCoord,
+            ObjectProvider<OutboxCoord> outboxCoord,
+            ObjectProvider<UserJpaDao>  jpaDao,
             ObjectProvider<UserJdbcDao> jdbcDao,
             ObjectProvider<UserMongoDao> mongoDao) {
-        // Retorna a primeira implementação disponível
-        // (em produção, isso seria baseado em uma propriedade)
-        if (jpaDao.getIfAvailable() != null) {
-            return jpaDao.getObject();
-        } else if (jdbcDao.getIfAvailable() != null) {
-            return jdbcDao.getObject();
-        } else if (mongoDao.getIfAvailable() != null) {
-            return mongoDao.getObject();
-        }
+
+        if (dtxCoord.getIfAvailable()    != null) return dtxCoord.getObject();
+        if (sagaCoord.getIfAvailable()   != null) return sagaCoord.getObject();
+        if (outboxCoord.getIfAvailable() != null) return outboxCoord.getObject();
+        if (jpaDao.getIfAvailable()      != null) return jpaDao.getObject();
+        if (jdbcDao.getIfAvailable()     != null) return jdbcDao.getObject();
+        if (mongoDao.getIfAvailable()    != null) return mongoDao.getObject();
+
         throw new IllegalStateException("Nenhuma implementação de UserDao disponível");
     }
 }
