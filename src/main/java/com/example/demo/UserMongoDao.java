@@ -1,5 +1,6 @@
 package com.example.demo;
 
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
@@ -7,8 +8,7 @@ import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Primary;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
@@ -16,79 +16,68 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Implementação MongoDB do UserDao.
+ * Implementação MongoDB do UserDao — também atua como participante 2PC.
  *
- * Usa o driver MongoDB (mongodb-driver-sync) diretamente, sem Spring Data MongoDB,
- * mantendo o padrão do projeto de expor as operações de persistência sem abstrações.
+ * Ativa para: mongo | dtx | saga | outbox
  *
- * Comparativo entre as implementações:
+ * Modo standalone (mongo):
+ *   save() faz insertOne direto, sem sessão de transação.
  *
- * | Conceito        | JPA (UserJpaDao)          | JDBC (UserJdbcDao)         | Mongo (UserMongoDao)         |
- * |-----------------|---------------------------|----------------------------|------------------------------|
- * | Conexão         | EntityManager             | DataSource / Connection    | MongoClient / MongoCollection|
- * | Inserção        | entityManager.persist()   | PreparedStatement INSERT   | collection.insertOne(doc)    |
- * | Busca           | entityManager.find()      | SELECT + ResultSet         | collection.find(filter)      |
- * | Transação       | @Transactional (AOP)      | setAutoCommit/commit       | session.startTransaction()   |
- * | Linguagem query | JPQL                      | SQL                        | BSON / Filter                |
- * | Schema          | gerado pelo Hibernate     | criado manualmente         | schema-less (documento livre)|
+ * Modo 2PC (dtx) — interface Participant:
+ *   prepare() abre ClientSession, inicia transação, executa insertOne e mantém
+ *   a sessão aberta no ThreadLocal, sem commitar.
+ *   commit()/rollback() finalizam a transação e fecham a sessão.
  *
- * Nota sobre ID: MongoDB usa ObjectId por padrão. Para manter compatibilidade
- * com a interface UserDao (que usa Long), geramos um ID incremental simples.
- * Em produção, use ObjectId ou um gerador distribuído (Snowflake, ULID).
+ * Nota: MongoDB Atlas (replica set) suporta transações via ClientSession.
+ * O dado inserido via sessão NÃO fica visível a outros leitores até o commit.
  */
 @Repository
-@Primary
 @Qualifier("mongo")
-@ConditionalOnProperty(name = "app.dao.impl", havingValue = "mongo")
-public class UserMongoDao implements UserDao {
+@ConditionalOnExpression(
+    "'${app.dao.impl:jpa}'.equals('mongo')  or " +
+    "'${app.dao.impl:jpa}'.equals('dtx')    or " +
+    "'${app.dao.impl:jpa}'.equals('saga')   or " +
+    "'${app.dao.impl:jpa}'.equals('outbox')"
+)
+public class UserMongoDao implements UserDao, Participant {
 
+    private final MongoClient mongoClient;
     private final MongoCollection<Document> collection;
 
-    // Gerador de ID simples para compatibilidade com a interface (Long id)
+    // Sessão mantida aberta entre prepare() e commit()/rollback() no modo 2PC
+    private final ThreadLocal<ClientSession> pendingSession = new ThreadLocal<>();
+
     private final AtomicLong idCounter = new AtomicLong(1);
 
     public UserMongoDao(MongoClient mongoClient,
                         @Value("${app.mongo.database}") String database) {
+        this.mongoClient = mongoClient;
         this.collection = mongoClient.getDatabase(database).getCollection("users");
     }
 
-    /**
-     * Insere um documento na coleção "users".
-     * Gera um ID Long incremental para compatibilidade com a interface.
-     */
+    // ─────────────────────────────────────────────────────────────────────────
+    // UserDao — operações standalone (modo mongo)
+    // ─────────────────────────────────────────────────────────────────────────
+
     @Override
     public void save(UserEntity user) {
-        if (user.getId() == null) {
-            user.setId(idCounter.getAndIncrement());
-        }
-        Document doc = toDocument(user);
-        collection.insertOne(doc);
+        if (user.getId() == null) user.setId(idCounter.getAndIncrement());
+        collection.insertOne(toDocument(user));
     }
 
-    /**
-     * Busca um documento por id (campo "id", não o _id do Mongo).
-     */
     @Override
     public UserEntity findById(Long id) {
         Document doc = collection.find(Filters.eq("id", id)).first();
         return doc != null ? toEntity(doc) : null;
     }
 
-    /**
-     * Retorna todos os documentos da coleção como lista de UserEntity.
-     */
     @Override
     public List<UserEntity> findAll() {
         List<UserEntity> result = new ArrayList<>();
-        for (Document doc : collection.find()) {
-            result.add(toEntity(doc));
-        }
+        for (Document doc : collection.find()) result.add(toEntity(doc));
         return result;
     }
 
-    /**
-     * Atualiza name e email de um documento existente.
-     */
     @Override
     public void update(UserEntity user) {
         collection.updateOne(
@@ -100,29 +89,96 @@ public class UserMongoDao implements UserDao {
         );
     }
 
-    /**
-     * Remove um documento pelo id.
-     */
     @Override
     public void delete(Long id) {
         collection.deleteOne(Filters.eq("id", id));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Mapeamento UserEntity ↔ Document (Serialização manual, sem frameworks)
+    // Participant — protocolo 2PC (modo dtx)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * FASE 1: abre sessão, inicia transação MongoDB, executa insertOne e aguarda.
+     * A sessão fica aberta no ThreadLocal até commit() ou rollback() serem chamados.
+     */
+    @Override
+    public boolean prepare(UserEntity user) {
+        log("prepare() → iniciando sessão e executando insertOne...");
+        try {
+            ClientSession session = mongoClient.startSession();
+            session.startTransaction();
+
+            if (user.getId() == null) user.setId(idCounter.getAndIncrement());
+            collection.insertOne(session, toDocument(user));
+
+            pendingSession.set(session);
+            log("prepare() → voto YES (sessão aberta, aguardando decisão)");
+            return true;
+
+        } catch (Exception e) {
+            log("prepare() → voto NO: " + e.getMessage());
+            rollback();
+            return false;
+        }
+    }
+
+    @Override
+    public void commit() {
+        ClientSession session = pendingSession.get();
+        if (session == null) return;
+        try {
+            session.commitTransaction();
+            log("commit() → confirmado");
+        } catch (Exception e) {
+            throw new RuntimeException("Falha no commit MongoDB", e);
+        } finally {
+            fechar(session);
+        }
+    }
+
+    @Override
+    public void rollback() {
+        ClientSession session = pendingSession.get();
+        if (session == null) return;
+        try {
+            if (session.hasActiveTransaction()) session.abortTransaction();
+            log("rollback() → revertido");
+        } catch (Exception e) {
+            log("rollback() → erro: " + e.getMessage());
+        } finally {
+            fechar(session);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Mapeamento UserEntity ↔ Document
     // ─────────────────────────────────────────────────────────────────────────
 
     private Document toDocument(UserEntity user) {
-        return new Document("id",    user.getId())
+        return new Document("id", user.getId())
                 .append("name",  user.getName())
                 .append("email", user.getEmail());
     }
 
     private UserEntity toEntity(Document doc) {
-        UserEntity user = new UserEntity();
-        user.setId(doc.getLong("id"));
-        user.setName(doc.getString("name"));
-        user.setEmail(doc.getString("email"));
-        return user;
+        UserEntity u = new UserEntity();
+        u.setId(doc.getLong("id"));
+        u.setName(doc.getString("name"));
+        u.setEmail(doc.getString("email"));
+        return u;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private void fechar(ClientSession session) {
+        pendingSession.remove();
+        try { session.close(); } catch (Exception ignored) {}
+    }
+
+    private void log(String msg) {
+        System.out.println("[MONGO-DAO] " + msg);
     }
 }
